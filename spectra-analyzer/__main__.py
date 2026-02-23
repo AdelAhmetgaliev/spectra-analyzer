@@ -203,6 +203,53 @@ def compute_period(velocity_files):
     return best_period, error_in_period, frequency, power
 
 
+def write_to_file(filename, phase, vels):
+    with open(filename, "w") as file:
+        for i, ph in enumerate(phase):
+            vel = vels[i]
+            file.write(f"{ph:.6f}\t{vel:.6f}\n")
+
+
+def phase_fold(times, velocities, period, epoch=None):
+    if epoch is None:
+        epoch = min(times)
+
+    phases = ((times - epoch) % period) / period
+    indices = np.argsort(phases)
+    sorted_phases = phases[indices]
+    folded_velocities = velocities[indices]
+
+    return sorted_phases, folded_velocities
+
+
+def sin_func(x, gamma, K, fi0):
+    return gamma + K * np.sin(2 * np.pi * (x - fi0))
+
+
+def f(x):
+    return x - 31.89 * (1 + 20 / x) ** 2
+
+
+def df_dx(x):
+    return 1 + 1275.6 / x**2 + 1275.6 / x**3
+
+
+def newton_method(x0, tol=1e-6, max_iter=100):
+    x = x0
+    iteration = 0
+    while iteration < max_iter:
+        fx = f(x)
+        if abs(fx) < tol:
+            return x
+        dfdx = df_dx(x)
+        x_next = x - fx / dfdx
+        if abs(x_next - x) < tol:
+            return x_next
+        x = x_next
+        iteration += 1
+    raise Exception("Метод Ньютона не сходится.")
+
+
 def main() -> None:
     velocity_files_arr = [
         "velocity_by_HeII.dat",
@@ -210,8 +257,18 @@ def main() -> None:
         "velocity_by_HeII_2.dat",
     ]
 
-    best_period, error, frequencies, powers = compute_period(velocity_files_arr)
-    print(f"Период {best_period:.3f} +/- {error:.3f} дней")
+    rad_vel_err_arr = calculate_radial_velocity_errors(velocity_files_arr)
+    best_period, error_in_period, frequency, power = compute_period(velocity_files_arr)
+
+    times = np.array([row[0] for row in rad_vel_err_arr])
+    velocities = np.array([row[1] for row in rad_vel_err_arr])
+    _errors = np.array([row[2] for row in rad_vel_err_arr])
+
+    phase_arr, vel_arr = phase_fold(times, velocities, best_period, epoch=None)
+
+    initial_guess = 20
+    root = newton_method(initial_guess)
+    print(f"Корень уравнения: {root:.6f}")
 
 
 if __name__ == "__main__":
