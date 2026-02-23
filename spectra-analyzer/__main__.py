@@ -1,141 +1,120 @@
 import os
-# from pprint import pprint
+import csv
+import math
+import statistics
 
-import numpy as np
-import matplotlib.pyplot as plt
+from pathlib import Path
+from typing import Iterable
 
 from . import DATA_DIR
-from .models.spectra import Spectra, generate_gauss_spectra
+from .models.spectra import Spectra
 from .models.observation import Observation
-from .utils import get_max_corr_wl
-from .utils.obs_reader import read_observations_from_file
-
+from .utils import calculate_radial_velocity
+from .utils.reader import read_observations_from_file
 
 FILTER_WINDOW_LENGTH: int = 11
 FILTER_POLY_ORDER: int = 3
+DELTA_WL: float = 10.0
+
+PathLikeStr = os.PathLike[str] | str | Path
 
 
-def plot_spectrum(observation: Observation, spectra: Spectra) -> None:
-    wl_list, intens_list = spectra.unzip()
-
-    _, ax = plt.subplots(figsize=(10, 6))
-
-    ax.plot(wl_list, intens_list, color="blue", linewidth=2)
-    ax.set_title(
-        f"Спектральные данные, MJD={observation.mjd}", fontsize=16, fontweight="bold"
-    )
-    ax.set_xlabel("Длина волны (A)", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Интенсивность", fontsize=14, fontweight="bold")
-
-    ax.set_xlim(min(wl_list), max(wl_list))
-    ax.set_ylim(min(intens_list) * 0.8, max(intens_list) * 1.1)
-
-    ax.legend(["Спектр"], loc="lower right", fontsize=12)
-    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-    ax.tick_params(axis="both", labelsize=12)
-
-    plt.show()
+def safe_radial_velocity(spec: Spectra, lab_wl: float) -> float:
+    if not spec.data:
+        return math.nan
+    try:
+        return calculate_radial_velocity(spec, lab_wl)
+    except Exception:
+        return math.nan
 
 
-def plot_spectrum_and_filtered(
-    observation: Observation, spectra: Spectra, spectra_filtered: Spectra
+def compute_daily_rv_stats(
+    observations: list[Observation], rad_wl_list: list[list[float]]
+) -> list[tuple[float, float, float]]:
+    if len(observations) != len(rad_wl_list):
+        raise ValueError("observations and rad_wl_list must have equal length")
+
+    results: list[tuple[float, float, float]] = []
+
+    for obs, rv_vals in zip(observations, rad_wl_list):
+        valid = [
+            float(v)
+            for v in rv_vals
+            if v is not None and not (isinstance(v, float) and math.isnan(v))
+        ]
+        n = len(valid)
+
+        if n == 0:
+            mean_rv = math.nan
+            sem_rv = math.nan
+        elif n == 1:
+            mean_rv = valid[0]
+            sem_rv = math.nan
+        else:
+            mean_rv = statistics.mean(valid)
+            stdev = statistics.stdev(valid)
+            sem_rv = stdev / math.sqrt(n)
+
+        results.append((float(obs.mjd), mean_rv, sem_rv))
+
+    return results
+
+
+def save_rv_stats_to_file(
+    out_path: str | Path,
+    stats: Iterable[tuple[float, float, float]],
+    *,
+    delimiter: str = ",",
+    float_format: str = "{:.4f}",
+    header: tuple[str, str, str] = ("mjd", "mean_rv", "sem_rv"),
 ) -> None:
-    wl_list, intens_list = spectra.unzip()
-    intens_filtered_list = spectra_filtered.intensities()
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
 
-    _, ax = plt.subplots(figsize=(10, 6))
+    with p.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh, delimiter=delimiter)
+        writer.writerow(header)
 
-    ax.plot(wl_list, intens_list, color="blue", linewidth=2)
-    ax.plot(wl_list, intens_filtered_list, color="green", linewidth=2)
-    ax.set_title(
-        f"Спектральные данные, MJD={observation.mjd}", fontsize=16, fontweight="bold"
-    )
-    ax.set_xlabel("Длина волны (A)", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Интенсивность", fontsize=14, fontweight="bold")
+        for mjd, mean_rv, sem_rv in stats:
 
-    ax.set_xlim(min(wl_list), max(wl_list))
-    ax.set_ylim(min(intens_list) * 0.8, max(intens_list) * 1.1)
+            def fmt(x: float) -> str:
+                return (
+                    "NaN"
+                    if x is None or (isinstance(x, float) and math.isnan(x))
+                    else float_format.format(float(x))
+                )
 
-    ax.legend(
-        ["Спектр исходный", "Спектр отфильтрованный"], loc="lower right", fontsize=12
-    )
-    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-    ax.tick_params(axis="both", labelsize=12)
-
-    plt.show()
-
-
-def plot_lines(line_spectra: Spectra, line_spectra_generated: Spectra) -> None:
-    wl_list, intens_list = line_spectra.unzip()
-    intens_list = 1.0 - np.array(intens_list)
-    intens_generated_list = 1.0 - np.array(line_spectra_generated.intensities())
-
-    _, ax = plt.subplots(figsize=(10, 6))
-
-    ax.plot(wl_list, intens_list, color="blue", linewidth=2)
-    ax.plot(wl_list, intens_generated_list, color="red", linewidth=2)
-    ax.set_title("Сравнение линий", fontsize=16, fontweight="bold")
-    ax.set_xlabel("Длина волны (A)", fontsize=14, fontweight="bold")
-    ax.set_ylabel("Интенсивность", fontsize=14, fontweight="bold")
-
-    ax.set_xlim(min(wl_list), max(wl_list))
-    ax.set_ylim(0, max(intens_list) * 1.1)
-
-    ax.legend(
-        ["Линия исходная", "Линия сгенерированная"], loc="upper right", fontsize=12
-    )
-    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-    ax.tick_params(axis="both", labelsize=12)
-
-    plt.show()
-
-
-def calculate_radial_velocity(line_spec: Spectra, lab_wl: float) -> float:
-    SPEED_OF_LIGHT = 299792458  # м/с
-
-    line_wl = get_max_corr_wl(line_spec)
-
-    return SPEED_OF_LIGHT * (line_wl - lab_wl) / lab_wl
+            writer.writerow([float(mjd), fmt(mean_rv), fmt(sem_rv)])
 
 
 def main() -> None:
-    lab_wl = 4101.734
-    path_to_obsdat = os.path.join(DATA_DIR, "ObsDat.txt")
+    path_to_obsdat = Path(os.fspath(DATA_DIR)) / "ObsDat.txt"
     observation_list = read_observations_from_file(path_to_obsdat)
+    if not observation_list:
+        raise SystemExit("No observations found")
+
     observation_list.sort(key=lambda obs: obs.mjd)
 
-    spectra_list: list[Spectra] = []
-    for obs in observation_list:
-        spec = Spectra(obs.file_path)
-        spectra_list.append(spec)
+    spectra_list: list[Spectra] = [
+        Spectra.from_file(obs.file_path) for obs in observation_list
+    ]
 
-    plot_spectrum_and_filtered(
-        observation_list[0],
-        spectra_list[0],
-        spectra_list[0].savgol_filter(FILTER_WINDOW_LENGTH, FILTER_POLY_ORDER),
-    )
+    lab_wl_list = [4199.83, 4541.591, 4685.698]
+    rad_wl_list: list[list[float]] = []
 
-    rad_vel_list: list[float] = []
     for spec in spectra_list:
-        filtered_spectra = spec.savgol_filter(FILTER_WINDOW_LENGTH, FILTER_POLY_ORDER)
-        hi_line_spectra = filtered_spectra.filter_by_wavelength(4092, 4110)
+        filtered_spec = spec.apply_savgol(FILTER_WINDOW_LENGTH, FILTER_POLY_ORDER)
 
-        # ###################
-        # center_wl = get_max_corr_wl(hi_line_spectra)
-        # ampl, sigma = 1.0 - min(hi_line_spectra.intensities()), 1.0
-        # templ_spec = generate_gauss_spectra(hi_line_spectra.wavelengths(), ampl, center_wl, sigma)
-        # plot_lines(hi_line_spectra, templ_spec)
-        # ###################
-
-        rad_vel = calculate_radial_velocity(hi_line_spectra, lab_wl)
-        rad_vel_list.append(rad_vel)
-
-    with open("velocity_by_HI_2.dat", mode="w+", encoding="utf-8") as output_file:
-        output_file.write("MJD\tradial velocity, km/s\n")
-        for i in range(len(observation_list)):
-            output_file.write(
-                f"{observation_list[i].mjd:.14f}\t{rad_vel_list[i] / 1000.0:+.1f}\n"
+        temp_list: list[float] = []
+        for lab_wl in lab_wl_list:
+            line_spec = filtered_spec.filter_by_wavelength(
+                lab_wl - DELTA_WL, lab_wl + DELTA_WL
             )
+            temp_list.append(safe_radial_velocity(line_spec, lab_wl))
+        rad_wl_list.append(temp_list)
+
+    velocity_stat = compute_daily_rv_stats(observation_list, rad_wl_list)
+    save_rv_stats_to_file("radial_velocity.csv", velocity_stat)
 
 
 if __name__ == "__main__":

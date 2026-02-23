@@ -1,100 +1,112 @@
 import os
-from typing import Self
-
 import numpy as np
 
+from pathlib import Path
+from typing import Self, Iterable
 from scipy.signal import savgol_filter
 
 from ..lines import get_gaussian_intens
 
-
-# Тип для хранения единичного элемента спектра: (длина волны, интенсивность)
-type SpectraPoint = tuple[float, float]
+SpectraPoint = tuple[float, float]
+PathLikeStr = os.PathLike[str] | str | Path
 
 
 class Spectra:
+    __slots__ = ("data",)
     data: list[SpectraPoint]
 
-    def __init__(self, file_path: str | os.PathLike) -> None:
-        self.data: list[SpectraPoint] = []
+    def __init__(self, data: Iterable[SpectraPoint] | None = None) -> None:
+        self.data = list(data) if data is not None else []
 
-        with open(file=file_path, mode="r", encoding="utf-8") as data_file:
-            for line in data_file:
-                data_tuple = tuple(map(float, line.split()))
-                if len(data_tuple) == 2:
-                    self.data.append(data_tuple)
+    @classmethod
+    def from_file(cls, file_path: PathLikeStr, *, encoding: str = "utf-8") -> Self:
+        p = Path(os.fspath(file_path))
+        data: list[SpectraPoint] = []
+        with p.open("r", encoding=encoding) as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                try:
+                    wl, inten = float(parts[0]), float(parts[1])
+                except ValueError:
+                    continue
+
+                data.append((wl, inten))
+
+        return cls(data)
+
+    @classmethod
+    def from_arrays(
+        cls, wavelengths: Iterable[float], intensities: Iterable[float]
+    ) -> Self:
+        return cls(list(zip(wavelengths, intensities)))
+
+    @classmethod
+    def gaussian(
+        cls, wavelengths: Iterable[float], amplitude: float, center: float, sigma: float
+    ) -> Self:
+        data = [
+            (wl, get_gaussian_intens(wl, amplitude, center, sigma))
+            for wl in wavelengths
+        ]
+
+        return cls(data)
 
     def wavelengths(self) -> list[float]:
-        wavelengths_list: list[float] = []
-        for data_el in self.data:
-            wavelengths_list.append(data_el[0])
-
-        return wavelengths_list
+        return [wl for wl, _ in self.data]
 
     def intensities(self) -> list[float]:
-        intensities_list: list[float] = []
-        for data_el in self.data:
-            intensities_list.append(data_el[1])
-
-        return intensities_list
+        return [inten for _, inten in self.data]
 
     def unzip(self) -> tuple[list[float], list[float]]:
-        wl_list: list[float] = []
-        intens_list: list[float] = []
-        for data_el in self.data:
-            wl_list.append(data_el[0])
-            intens_list.append(data_el[1])
+        if not self.data:
+            return [], []
 
-        return wl_list, intens_list
+        wl, inten = zip(*self.data)
 
-    def normalize_intensities(self) -> Self:
-        wl_list = self.wavelengths()
-        intens_list = self.intensities()
-        max_intens = 1.0 - min(intens_list)
+        return list(wl), list(inten)
 
-        new_data: list[SpectraPoint] = []
-        for i, intens in enumerate(intens_list):
-            new_data.append((wl_list[i], intens / max_intens))
+    def normalize_intensities(self, *, clip: bool = True) -> Self:
+        wl_list, inten_list = self.unzip()
+        if not inten_list:
+            return self.__class__([])
 
-        norm_spectra = Spectra.__new__(Spectra)
-        norm_spectra.data = new_data
-        return norm_spectra  # type: ignore
+        min_int = min(inten_list)
+        max_int = max(inten_list)
+        denom = max_int - min_int or 1.0
+        normalized = [
+            (wl, (inten - min_int) / denom) for wl, inten in zip(wl_list, inten_list)
+        ]
 
-    def savgol_filter(self, window_length: int, poly_order: int) -> Self:
-        wl_list, intens_list = self.unzip()
-        intens_filter_list = np.array(
-            savgol_filter(intens_list, window_length, poly_order)
+        return self.__class__(normalized)
+
+    def apply_savgol(self, window_length: int, poly_order: int) -> Self:
+        wl_list, inten_list = self.unzip()
+        n = len(inten_list)
+
+        if n == 0:
+            return self.__class__([])
+        if window_length <= 0 or poly_order < 0:
+            raise ValueError("window_length must be > 0 and poly_order >= 0")
+        if window_length > n:
+            window_length = n if n % 2 == 1 else n - 1
+        if window_length % 2 == 0:
+            window_length -= 1
+        if window_length < 1:
+            raise ValueError("Resulting window_length is < 1; can't apply filter")
+
+        filtered = np.array(
+            savgol_filter(
+                np.asarray(inten_list, dtype=float), window_length, poly_order
+            )
         )
 
-        filtered_data: list[SpectraPoint] = list(zip(wl_list, intens_filter_list))
-        filtered_spectra = Spectra.__new__(Spectra)
-        filtered_spectra.data = filtered_data
-        return filtered_spectra  # type: ignore
+        return self.__class__.from_arrays(wl_list, filtered.tolist())
 
     def filter_by_wavelength(self, wl_min: float, wl_max: float) -> Self:
-        wl_list, intens_list = self.unzip()
-        new_wl_list: list[float] = []
-        new_intens_list: list[float] = []
+        if wl_min > wl_max:
+            raise ValueError("wl_min must be <= wl_max")
 
-        for i, wl in enumerate(wl_list):
-            if wl < wl_min or wl > wl_max:
-                continue
-            new_wl_list.append(wl)
-            new_intens_list.append(intens_list[i])
-
-        new_data: list[SpectraPoint] = list(zip(new_wl_list, new_intens_list))
-        result_spectra = Spectra.__new__(Spectra)
-        result_spectra.data = new_data
-        return result_spectra  # type: ignore
-
-
-def generate_gauss_spectra(
-    wavelengths: list[float], amplitude: float, center: float, sigma: float
-) -> Spectra:
-    result_data: list[SpectraPoint] = []
-    for wl in wavelengths:
-        result_data.append((wl, get_gaussian_intens(wl, amplitude, center, sigma)))
-
-    result_spectra = Spectra.__new__(Spectra)
-    result_spectra.data = result_data
-    return result_spectra
+        filtered = [(wl, inten) for wl, inten in self.data if wl_min <= wl <= wl_max]
+        return self.__class__(filtered)
