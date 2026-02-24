@@ -4,8 +4,10 @@ import math
 import statistics
 
 import numpy as np
+import matplotlib.pyplot as plt
 from astropy.timeseries import LombScargle
 from scipy.optimize import curve_fit
+from scipy.integrate import trapezoid
 
 from pathlib import Path
 from typing import Iterable, Callable, Tuple, Optional
@@ -261,7 +263,7 @@ def my_model(phi: np.ndarray, A: float, phi0: float, offset: float) -> np.ndarra
     return A * np.sin(2.0 * np.pi * (phi - phi0)) + offset
 
 
-def main() -> None:
+def main_period() -> None:
     times, rvels, errs = read_rv_csv("radial_velocity.csv")
     rvels = rvels / 1000.0
     errs = errs / 1000.0
@@ -318,7 +320,7 @@ def main() -> None:
     save_figure(fig, "rv_phase_model.png")
 
 
-def _main() -> None:
+def main_rv() -> None:
     path_to_obsdat = Path(os.fspath(DATA_DIR)) / "ObsDat.txt"
     observation_list = read_observations_from_file(path_to_obsdat)
     if not observation_list:
@@ -369,6 +371,109 @@ def _main() -> None:
 
     fig, _ = plot_lines(line_spec, gen_line)
     save_figure(fig, "line_spec.png")
+
+
+def plot_spectrum(
+    spectra: Spectra,
+    *,
+    show: bool = True,
+    color: str = "k",
+    fontsize: int = 14,
+) -> Tuple:
+    wl_list, intens_list = spectra.unzip()
+    wl = np.asarray(wl_list, dtype=float)
+    inten = np.asarray(intens_list, dtype=float)
+
+    if wl.size == 0:
+        raise ValueError("Spectrum is empty")
+
+    plt.rcParams.update(
+        {
+            "font.size": fontsize,
+            "font.family": "sans-serif",
+            "axes.linewidth": 1.0,
+            "xtick.direction": "in",
+            "ytick.direction": "in",
+            "xtick.major.size": 6,
+            "ytick.major.size": 6,
+            "xtick.minor.size": 3,
+            "ytick.minor.size": 3,
+        }
+    )
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+    ax.plot(
+        wl,
+        inten,
+        color=color,
+        linewidth=1.6,
+        label="Спектр звезды",
+    )
+
+    ax.set_xlabel("Длина волны, A", fontsize=fontsize)
+    ax.set_ylabel("Относительная интенсивность", fontsize=fontsize)
+    ax.grid(True, linestyle="--", linewidth=0.6, alpha=0.5)
+    ax.tick_params(which="both", top=True, right=True, labelsize=fontsize)
+    ax.minorticks_on()
+
+    plt.tight_layout()
+    if show:
+        plt.show()
+
+    return fig, ax
+
+
+H_LINES_BOUNDS: list[tuple[float, float]] = [
+    (4092.5, 4110.0),
+    (4330.0, 4352.5),
+    (4848.5, 4873.0),
+]
+
+
+def main() -> None:
+    path_to_spectra = Path(os.fspath(DATA_DIR)) / "obs" / "obs_18"
+
+    spectra = Spectra.from_file(path_to_spectra)
+    filtered_spectra = spectra.apply_savgol(FILTER_WINDOW_LENGTH, FILTER_POLY_ORDER)
+    # plot_spectrum(filtered_spectra)
+    
+    lines_data: list[tuple[float, float, float]] = []
+    for lbound in H_LINES_BOUNDS:
+        wl_left, wl_right = lbound
+        line_spec = filtered_spectra.filter_by_wavelength(wl_left, wl_right)
+        # plot_spectrum(line_spec)
+        
+        wls, intens = tuple(map(np.asarray, line_spec.unzip()))
+        intens = 1.0 - intens
+        peak_wl = get_max_corr_wl(line_spec)
+        peak_idx = wls.tolist().index(peak_wl)
+
+        peak_intens = intens[peak_idx]
+        threshold = peak_intens * 0.5
+
+        left_idx = 0
+        for i in range(peak_idx, -1, -1):
+            if intens[i] <= threshold:
+                left_idx = i
+                break
+
+        right_idx = len(intens) - 1
+        for i in range(peak_idx, len(intens)):
+            if intens[i] <= threshold:
+                right_idx = i
+                break
+
+        wl_left = wls[left_idx]
+        wl_right = wls[right_idx]
+        fwhm = wl_right - wl_left
+        # print(wl_left, wl_right)
+        # plot_spectrum(line_spec)
+        ew = trapezoid(intens, wls)
+        lines_data.append((peak_wl, fwhm, ew))
+    
+    for ldata in lines_data:
+        print(f"{ldata[0]:.2f} A - FWHM: {ldata[1]:.1f}, EW: {ldata[2]:.1f}")
 
 
 if __name__ == "__main__":
