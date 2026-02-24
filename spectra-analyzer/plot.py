@@ -43,7 +43,7 @@ def save_figure(
 
 def plot_spectrum(
     observation: Observation, spectra: Spectra, *, show: bool = True
-) -> None:
+) -> Tuple:
     wl_list, intens_list = spectra.unzip()
     wl = np.asarray(wl_list, dtype=float)
     inten = np.asarray(intens_list, dtype=float)
@@ -51,8 +51,8 @@ def plot_spectrum(
     if wl.size == 0:
         raise ValueError("Spectrum is empty")
 
-    _, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(wl, inten, color="blue", linewidth=2)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(wl, inten, color="#d24e26", linewidth=2)
     ax.set_title(
         f"Спектральные данные, MJD={observation.mjd}", fontsize=16, fontweight="bold"
     )
@@ -66,8 +66,10 @@ def plot_spectrum(
     ax.grid(True, which="both", linestyle="--", linewidth=0.5)
     ax.tick_params(axis="both", labelsize=12)
 
+    plt.tight_layout()
     if show:
         plt.show()
+    return fig, ax
 
 
 def plot_spectrum_and_filtered(
@@ -76,7 +78,7 @@ def plot_spectrum_and_filtered(
     spectra_filtered: Spectra,
     *,
     show: bool = True,
-) -> None:
+) -> Tuple:
     wl_list, intens_list = spectra.unzip()
     wl = np.asarray(wl_list, dtype=float)
     inten = np.asarray(intens_list, dtype=float)
@@ -87,9 +89,9 @@ def plot_spectrum_and_filtered(
     if inten_f.shape != inten.shape:
         raise ValueError("Filtered spectrum length mismatch")
 
-    _, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(wl, inten, color="blue", linewidth=2)
-    ax.plot(wl, inten_f, color="green", linewidth=2)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(wl, inten, color="#d24e26", linewidth=2)
+    ax.plot(wl, inten_f, color="#8c3e3b", linewidth=2)
     ax.set_title(
         f"Спектральные данные, MJD={observation.mjd}", fontsize=16, fontweight="bold"
     )
@@ -105,13 +107,15 @@ def plot_spectrum_and_filtered(
     ax.grid(True, which="both", linestyle="--", linewidth=0.5)
     ax.tick_params(axis="both", labelsize=12)
 
+    plt.tight_layout()
     if show:
         plt.show()
+    return fig, ax
 
 
 def plot_lines(
     line_spectra: Spectra, line_spectra_generated: Spectra, *, show: bool = True
-) -> None:
+) -> Tuple:
     wl_list, intens_list = line_spectra.unzip()
     wl = np.asarray(wl_list, dtype=float)
     inten = 1.0 - np.asarray(intens_list, dtype=float)
@@ -122,9 +126,9 @@ def plot_lines(
     if inten_gen.shape != inten.shape:
         raise ValueError("Generated spectrum length mismatch")
 
-    _, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(wl, inten, color="blue", linewidth=2)
-    ax.plot(wl, inten_gen, color="red", linewidth=2)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(wl, inten, color="#d24e26", linewidth=2)
+    ax.plot(wl, inten_gen, color="#8c3e3b", linewidth=2)
     ax.set_title("Сравнение линий", fontsize=16, fontweight="bold")
     ax.set_xlabel("Длина волны (A)", fontsize=14, fontweight="bold")
     ax.set_ylabel("Интенсивность", fontsize=14, fontweight="bold")
@@ -138,8 +142,10 @@ def plot_lines(
     ax.grid(True, which="both", linestyle="--", linewidth=0.5)
     ax.tick_params(axis="both", labelsize=12)
 
+    plt.tight_layout()
     if show:
         plt.show()
+    return fig, ax
 
 
 def plot_rv_and_phase(
@@ -458,4 +464,20 @@ def plot_phase_only_with_model(
         ax.set_title(title, fontsize=fontsize + 1)
 
     plt.tight_layout()
+    return fig, ax
+
+
+def plot_periodogram(freqs, powers, *, show: bool = True) -> Tuple:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(freqs, powers, color="#4e0e1f", linewidth=2)
+    ax.set_title("Периодограмма метода Ломба-Скарла", fontsize=16, fontweight="bold")
+    ax.set_xlabel("Частота", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Мощность", fontsize=14, fontweight="bold")
+
+    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+    ax.tick_params(axis="both", labelsize=12)
+
+    plt.tight_layout()
+    if show:
+        plt.show()
     return fig, ax

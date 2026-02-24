@@ -13,13 +13,16 @@ from typing import Iterable, Callable, Tuple, Optional
 from . import DATA_DIR
 from .models.spectra import Spectra
 from .models.observation import Observation
-from .utils import calculate_radial_velocity
+from .utils import calculate_radial_velocity, get_max_corr_wl
 from .utils.reader import read_observations_from_file
 from .plot import (
     save_figure,
     plot_rv_and_phase,
     plot_rv_phase_with_model,
     plot_phase_only_with_model,
+    plot_spectrum_and_filtered,
+    plot_lines,
+    plot_periodogram,
 )
 
 FILTER_WINDOW_LENGTH: int = 11
@@ -264,6 +267,9 @@ def main() -> None:
     errs = errs / 1000.0
 
     freqs, powers = compute_periodogram(times, rvels, errs)
+    fig, _ = plot_periodogram(freqs, powers)
+    save_figure(fig, "periodogram.png")
+
     best_freq, peak_idx = find_best_frequency(freqs, powers)
     best_period = 1.0 / best_freq
 
@@ -288,6 +294,8 @@ def main() -> None:
         bounds=bounds,
     )
     print(f"{popt[0]:.3f} +/- {perr[0]:.3f}")
+    print(f"{popt[1]:.3f} +/- {perr[1]:.3f}")
+    print(f"{popt[2]:.3f} +/- {perr[2]:.3f}")
 
     fig, _ = plot_rv_phase_with_model(
         times,
@@ -338,6 +346,29 @@ def _main() -> None:
 
     velocity_stat = compute_daily_rv_stats(observation_list, rad_wl_list)
     save_rv_stats_to_file("radial_velocity.csv", velocity_stat)
+    obs = Observation.__new__(Observation)
+    spec: Spectra = Spectra.from_arrays([], [])
+    for i, obs in enumerate(observation_list):
+        if abs(obs.mjd - 4029.3505702397024) <= 0.1:
+            spec = spectra_list[i]
+            obs = obs
+
+    filt_spec = spec.apply_savgol(FILTER_WINDOW_LENGTH, FILTER_POLY_ORDER)
+    fig, _ = plot_spectrum_and_filtered(obs, spec, filt_spec)
+    save_figure(
+        fig,
+        "spec_filter.png",
+    )
+    lab_wl = lab_wl_list[0]
+    line_spec = filt_spec.filter_by_wavelength(lab_wl - DELTA_WL, lab_wl + DELTA_WL)
+
+    center_wl = get_max_corr_wl(line_spec)
+    ampl = float(1.0 - min(line_spec.intensities()))
+    sigma = 1.0
+    gen_line = Spectra.gaussian(line_spec.wavelengths(), ampl, center_wl, sigma)
+
+    fig, _ = plot_lines(line_spec, gen_line)
+    save_figure(fig, "line_spec.png")
 
 
 if __name__ == "__main__":
